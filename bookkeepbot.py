@@ -9,8 +9,8 @@ from urlparse import parse_qs
 from decimal import Decimal
 from urllib2 import Request, urlopen, URLError, HTTPError
 
-table_name = os.environ['TABLE_NAME']
-region_name = os.getenv('REGION_NAME', 'ap-northeast-2')
+table_name = os.environ['TABLE_NAME'] # for example: IOweSlack
+region_name = os.getenv('REGION_NAME', 'ap-northeast-2') # for example: ap-northeast-2
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -29,16 +29,16 @@ def respond(err, res=None):
 def parse_user_and_amount(text):
     user = None
 
-    p_user = re.match(r"<\@(.*)\|(.*)>", text)
+    p_user = re.match(r"(<\@(.*)\|(.*)>)", text)
     if p_user:
-        user = p_user.group(2)
+        user = p_user.group(1)
 
     amount = None
     p_amount = re.match(r"(.*)(-?)(\$)(\d\d?(\d+|(,\d\d\d)*)(\.\d+)?|(\.\d+))", text)
     if p_amount:
         amount = Decimal(p_amount.group(4).replace(',', '').replace('$', ''))
 
-    return user,amount
+    return user, amount
 
 
 def save_to_db(user, owed_user, owed_amount):
@@ -53,7 +53,7 @@ def save_to_db(user, owed_user, owed_amount):
         }
     )
 
-    #add owed_amount to owed_user
+    # add owed_amount to owed_user
     dynamo.update_item(TableName=table_name,
         Key={'username': {'S':owed_user}},
         AttributeUpdates= {
@@ -110,7 +110,7 @@ def lambda_handler(event, context):
         response_msg = "You can resolve your own debts to yourself. No chips changed!"
     else:
         save_to_db(user, owed_user, owed_amount)
-        response_msg = "success! @%s lost %s chips while @%s gained %s chips" % (user, owed_amount, owed_user, owed_amount)
+        response_msg = "@%s lost %s chips while @%s gained %s chips" % (user, owed_amount, owed_user, owed_amount)
         logger.info(response_msg)
 
 
