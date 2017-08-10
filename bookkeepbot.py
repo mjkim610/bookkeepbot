@@ -9,12 +9,13 @@ from urlparse import parse_qs
 from decimal import Decimal
 from urllib2 import Request, urlopen, URLError, HTTPError
 
-table_name = os.environ['TABLE_NAME'] # for example: IOweSlack
+table_name = os.environ['TABLE_NAME']  # for example: bookkeepbot_ledger
 region_name = os.getenv('REGION_NAME', 'ap-northeast-2') # for example: ap-northeast-2
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 dynamo = boto3.client('dynamodb', region_name=region_name)
+
 
 def respond(err, res=None):
     return {
@@ -26,7 +27,7 @@ def respond(err, res=None):
     }
 
 
-def parse_user_and_amount(text):
+def parse_user_and_amount(text):  # make sure to check `Escape channels, users, and links sent to your app` in Slack
     user = None
 
     p_user = re.match(r"(<\@(.*)\|(.*)>)", text)
@@ -41,10 +42,10 @@ def parse_user_and_amount(text):
     return user, amount
 
 
-def save_to_db(user, owed_user, owed_amount):
+def save_to_db(user, owed_user, owed_amount):  # make sure to use the same keys in DynamoDB
     # subtract owed_amount from user
     dynamo.update_item(TableName=table_name,
-        Key={'username':{'S':user}},
+        Key={'user_id':{'S':user}},
         AttributeUpdates= {
             'chips':{
                 'Action': 'ADD',
@@ -55,7 +56,7 @@ def save_to_db(user, owed_user, owed_amount):
 
     # add owed_amount to owed_user
     dynamo.update_item(TableName=table_name,
-        Key={'username': {'S':owed_user}},
+        Key={'user_id': {'S':owed_user}},
         AttributeUpdates= {
             'chips':{
                 'Action': 'ADD',
@@ -89,8 +90,9 @@ def lambda_handler(event, context):
 
     params = parse_qs(event['body'])
     token = params['token'][0]
-
-    user = params['user_name'][0]
+    user_id = params['user_id'][0]
+    user_name = params['user_name'][0]
+    user = "<@" + user_id + "|" + user_name + ">"
     command = params['command'][0]
     channel = params['channel_name'][0]
     command_text = params['text'][0]
@@ -110,11 +112,11 @@ def lambda_handler(event, context):
         response_msg = "You can resolve your own debts to yourself. No chips changed!"
     else:
         save_to_db(user, owed_user, owed_amount)
-        response_msg = "@%s lost %s chips while @%s gained %s chips" % (user, owed_amount, owed_user, owed_amount)
+        response_msg = "%s lost %s chips while %s gained %s chips" % (user, owed_amount, owed_user, owed_amount)
         logger.info(response_msg)
 
 
     return respond(None, {
             'response_type': 'in_channel',
             'text': response_msg
-        })
+    })
