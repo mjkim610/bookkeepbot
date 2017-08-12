@@ -2,10 +2,10 @@
 An implementation of the Lex Code Hook Interface based on AWS sample bot which manages orders for flowers.
 """
 import time
-import math
-import re
 import os
 import logging
+from urllib import urlopen, urlencode
+import json
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -58,8 +58,21 @@ def delegate(session_attributes, slots):
 
 
 def isvalid_user(user):
-    users = ['mjkim', 'mj', 'mjkim610']
-    return user.lower() in users
+    url = "https://slack.com/api/users.info"
+    params = {
+        'token': '',  # TODO: Record token value in Lambda using environment variables
+        'user': user,
+    }
+    params_encoded = urlencode(params)
+
+    try:
+        resp = urlopen(url, params_encoded)
+        json.load(resp)["user"]["name"]
+        return True
+    except IOError:
+        return False
+    except KeyError as e:
+        return False
 
 
 def isvalid_float(s):
@@ -88,12 +101,7 @@ def validate_request_debt(lender, amount):
                                            '{} is an invalid user. '
                                            'Please enter a user in the Slack team.'.format(lender))
 
-    # TODO:
-    # Can't tell if this is not working or Lex is handling typos
-    # Bot is ignoring symbols other than `$`
     if amount is not None:
-        if amount[0] == "$":
-            amount = amount[1:]
         if not isvalid_float(amount):
             return build_validation_result(False,
                                            'Amount',
