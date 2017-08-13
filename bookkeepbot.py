@@ -4,13 +4,11 @@ import logging
 import re
 import os
 
-from base64 import b64decode
 from urlparse import parse_qs
 from decimal import Decimal
-from urllib2 import Request, urlopen, URLError, HTTPError
 
 table_name = os.environ['TABLE_NAME']  # for example: bookkeepbot_ledger
-region_name = os.getenv('REGION_NAME', 'ap-northeast-2') # for example: ap-northeast-2
+region_name = os.getenv('REGION_NAME', 'ap-northeast-2')  # for example: ap-northeast-2
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -89,23 +87,19 @@ def lambda_handler(event, context):
         return
 
     params = parse_qs(event['body'])
-    token = params['token'][0]
     user_id = params['user_id'][0]
     user_name = params['user_name'][0]
     user = "<@" + user_id + "|" + user_name + ">"
-    command = params['command'][0]
-    channel = params['channel_name'][0]
     command_text = params['text'][0]
-    response_url = params['response_url'][0]
 
     owed_user, owed_amount = parse_user_and_amount(command_text)
 
     if command_text == 'list' or command_text == 'tally':
         response_msg = get_tally()
     elif owed_user is None:
-        response_msg = "Make sure to include a user who is a member of the team, or use `list` to get the current chip count"
+        response_msg = "Make sure to include a user who is a member of the team, or use `list` to get the current chip count."
     elif owed_amount is None:
-        response_msg = "Make sure to include an amount, or use `list` to get the current chip count"
+        response_msg = "Make sure to include an amount, or use `list` to get the current chip count."
     elif owed_amount < Decimal(0):
         response_msg = "You can't owe someone negative. Get them to owe you to erase debts."
     elif owed_user == user:
