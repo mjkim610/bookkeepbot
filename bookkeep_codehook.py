@@ -1,14 +1,20 @@
 """
 An implementation of the Lex Code Hook Interface based on AWS sample bot which manages orders for flowers.
 """
+import boto3
 import time
 import os
 import logging
 from urllib import urlopen, urlencode
 import json
 
+table_name = os.environ['TABLE_NAME']  # for example: bookkeepbot_ledger
+region_name = os.getenv('REGION_NAME', 'ap-northeast-2')  # for example: ap-northeast-2
+slack_token = os.environ['SLACK_WEB_API_TOKEN']
+
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
+dynamo = boto3.client('dynamodb', region_name=region_name)
 
 
 """ --- Helpers to build responses which match the structure of the necessary dialog actions --- """
@@ -60,7 +66,7 @@ def delegate(session_attributes, slots):
 def isvalid_user(user):
     url = "https://slack.com/api/users.info"
     params = {
-        'token': '',  # TODO: Record token value in Lambda using environment variables
+        'token': slack_token,
         'user': user,
     }
     params_encoded = urlencode(params)
@@ -71,7 +77,7 @@ def isvalid_user(user):
         return True
     except IOError:
         return False
-    except KeyError as e:
+    except KeyError:
         return False
 
 
@@ -111,6 +117,61 @@ def validate_request_debt(lender, amount):
     return build_validation_result(True, None, None)
 
 
+""" --- Helper functions for record_debt --- """
+
+
+def parse_user_and_amount(debtor, lender, amount):
+
+    url = "https://slack.com/api/users.info"
+    params = {
+        'token': slack_token,
+        'user': lender,
+    }
+    params_encoded = urlencode(params)
+
+    resp = urlopen(url, params_encoded)
+    user_name = json.load(resp)["user"]["name"]
+    lender_escaped = "<@" + lender + "|" + user_name + ">"
+
+    params = {
+        'token': slack_token,
+        'user': debtor,
+    }
+    params_encoded = urlencode(params)
+
+    resp = urlopen(url, params_encoded)
+    user_name = json.load(resp)["user"]["name"]
+    debtor_escaped = "<@" + debtor + "|" + user_name + ">"
+
+    owed_amount = float(amount)
+
+    return debtor_escaped, lender_escaped, owed_amount
+
+
+def save_to_db(user, owed_user, owed_amount):  # make sure to use the same keys in DynamoDB
+    # subtract owed_amount from user
+    dynamo.update_item(TableName=table_name,
+        Key={'user_id':{'S':user}},
+        AttributeUpdates= {
+            'chips':{
+                'Action': 'ADD',
+                'Value': {'N': str(-owed_amount)}
+            }
+        }
+    )
+
+    # add owed_amount to owed_user
+    dynamo.update_item(TableName=table_name,
+        Key={'user_id': {'S':owed_user}},
+        AttributeUpdates= {
+            'chips':{
+                'Action': 'ADD',
+                'Value': {'N': str(owed_amount)}
+            }
+        }
+    )
+
+
 """ --- Functions that control the bot's behavior --- """
 
 
@@ -121,6 +182,8 @@ def record_debt(intent_request):
     in slot validation and re-prompting.
     """
 
+    debtor_raw = intent_request['userId']
+    debtor = debtor_raw.split(":")[2]
     lender = get_slots(intent_request)["Lender"]
     amount = get_slots(intent_request)["Amount"]
     source = intent_request['invocationSource']
@@ -139,20 +202,19 @@ def record_debt(intent_request):
                                validation_result['violatedSlot'],
                                validation_result['message'])
 
-        # Pass the price of the flowers back through session attributes to be used in various prompts defined
-        # on the bot model.
+        # TODO: Utilize output_session_attributes
         output_session_attributes = intent_request['sessionAttributes'] if intent_request['sessionAttributes'] is not None else {}
-        if lender is not None:
-            output_session_attributes['Somevalue'] = len(lender) * 5  # Elegant pricing model
 
         return delegate(output_session_attributes, get_slots(intent_request))
 
-    # Order the flowers, and rely on the goodbye message of the bot to define the message to the end user.
-    # In a real bot, this would likely involve a call to a backend service.
+    # Store changes, and rely on the goodbye message of the bot to define the message to the end user. (Lex goodbye message is not displayed)
+    user, owed_user, owed_amount = parse_user_and_amount(debtor, lender, amount)
+    save_to_db(user, owed_user, owed_amount)
+
     return close(intent_request['sessionAttributes'],
                  'Fulfilled',
                  {'contentType': 'PlainText',
-                  'content': 'Okay, I will record {} chips owed to {} in my books'.format(amount, lender)})
+                  'content': 'Okay, I have successfully recorded {} chips owed to {} in my books'.format(amount, lender)})
 
 
 """ --- Intents --- """
@@ -182,8 +244,8 @@ def lambda_handler(event, context):
     Route the incoming request based on intent.
     The JSON body of the request is provided in the event slot.
     """
-    # By default, treat the user request as coming from the America/New_York time zone.
-    os.environ['TZ'] = 'America/New_York'
+    # By default, treat the user request as coming from the Asia/Seoul time zone.
+    os.environ['TZ'] = 'Asia/Seoul'
     time.tzset()
     logger.debug('event.bot.name={}'.format(event['bot']['name']))
 
