@@ -1,6 +1,3 @@
-"""
-An implementation of the Lex Code Hook Interface based on AWS sample bot which manages orders for flowers.
-"""
 import boto3
 import time
 import os
@@ -9,7 +6,7 @@ from urllib import urlopen, urlencode
 import json
 
 table_name = os.environ['TABLE_NAME']  # for example: bookkeepbot_ledger
-region_name = os.getenv('REGION_NAME', 'ap-northeast-2')  # for example: ap-northeast-2
+region_name = os.getenv('REGION_NAME', 'us-east-1')  # for example: ap-northeast-2
 slack_token = os.environ['SLACK_WEB_API_TOKEN']
 
 logger = logging.getLogger()
@@ -18,10 +15,6 @@ dynamo = boto3.client('dynamodb', region_name=region_name)
 
 
 """ --- Helpers to build responses which match the structure of the necessary dialog actions --- """
-
-
-def get_slots(intent_request):
-    return intent_request['currentIntent']['slots']
 
 
 def elicit_slot(session_attributes, intent_name, slots, slot_to_elicit, message):
@@ -33,6 +26,16 @@ def elicit_slot(session_attributes, intent_name, slots, slot_to_elicit, message)
             'slots': slots,
             'slotToElicit': slot_to_elicit,
             'message': message
+        }
+    }
+
+
+def delegate(session_attributes, slots):
+    return {
+        'sessionAttributes': session_attributes,
+        'dialogAction': {
+            'type': 'Delegate',
+            'slots': slots
         }
     }
 
@@ -50,30 +53,12 @@ def close(session_attributes, fulfillment_state, message):
     return response
 
 
-def delegate(session_attributes, slots):
-    return {
-        'sessionAttributes': session_attributes,
-        'dialogAction': {
-            'type': 'Delegate',
-            'slots': slots
-        }
-    }
-
-
 """ --- Helper Functions --- """
 
 
 def isvalid_user(user):
-    url = "https://slack.com/api/users.info"
-    params = {
-        'token': slack_token,
-        'user': user,
-    }
-    params_encoded = urlencode(params)
-
     try:
-        resp = urlopen(url, params_encoded)
-        json.load(resp)["user"]["name"]
+        get_slack_username(user)
         return True
     except IOError:
         return False
@@ -83,6 +68,18 @@ def isvalid_user(user):
 
 def isvalid_float(s):
     return s.replace('.', '', 1).isdigit()
+
+
+def get_slack_username(user):
+    url = "https://slack.com/api/users.info"
+    params = {
+        'token': slack_token,
+        'user': user,
+    }
+    params_encoded = urlencode(params)
+
+    resp = urlopen(url, params_encoded)
+    return json.load(resp)["user"]["name"]
 
 
 def build_validation_result(is_valid, violated_slot, message_content):
@@ -122,53 +119,39 @@ def validate_request_debt(lender, amount):
 
 def parse_user_and_amount(debtor, lender, amount):
 
-    url = "https://slack.com/api/users.info"
-    params = {
-        'token': slack_token,
-        'user': lender,
-    }
-    params_encoded = urlencode(params)
-
-    resp = urlopen(url, params_encoded)
-    user_name = json.load(resp)["user"]["name"]
+    user_name = get_slack_username(lender)
     lender_escaped = "<@" + lender + "|" + user_name + ">"
 
-    params = {
-        'token': slack_token,
-        'user': debtor,
-    }
-    params_encoded = urlencode(params)
-
-    resp = urlopen(url, params_encoded)
-    user_name = json.load(resp)["user"]["name"]
+    user_name = get_slack_username(debtor)
     debtor_escaped = "<@" + debtor + "|" + user_name + ">"
 
+    logger.debug('AMOUNT={}'.format(amount))
     owed_amount = float(amount)
 
     return debtor_escaped, lender_escaped, owed_amount
 
 
-def save_to_db(user, owed_user, owed_amount):  # make sure to use the same keys in DynamoDB
-    # subtract owed_amount from user
+def save_to_db(debtor, lender, amount):  # make sure to use the same keys in DynamoDB
+    # subtract amount from debtor
     dynamo.update_item(TableName=table_name,
-        Key={'user_id':{'S':user}},
-        AttributeUpdates= {
-            'chips':{
-                'Action': 'ADD',
-                'Value': {'N': str(-owed_amount)}
-            }
-        }
+                       Key={'user':{'S': debtor}},
+                       AttributeUpdates={
+                           'chips': {
+                               'Action': 'ADD',
+                               'Value': {'N': str(-amount)}
+                           }
+                       }
     )
 
-    # add owed_amount to owed_user
+    # add amount to lender
     dynamo.update_item(TableName=table_name,
-        Key={'user_id': {'S':owed_user}},
-        AttributeUpdates= {
-            'chips':{
-                'Action': 'ADD',
-                'Value': {'N': str(owed_amount)}
-            }
-        }
+                       Key={'user': {'S': lender}},
+                       AttributeUpdates={
+                           'chips': {
+                               'Action': 'ADD',
+                               'Value': {'N': str(amount)}
+                           }
+                       }
     )
 
 
@@ -177,21 +160,20 @@ def save_to_db(user, owed_user, owed_amount):  # make sure to use the same keys 
 
 def record_debt(intent_request):
     """
-    Performs dialog management and fulfillment for ordering flowers.
+    Performs dialog management and fulfillment for recording debt.
     Beyond fulfillment, the implementation of this intent demonstrates the use of the elicitSlot dialog action
     in slot validation and re-prompting.
     """
 
-    debtor_raw = intent_request['userId']
-    debtor = debtor_raw.split(":")[2]
-    lender = get_slots(intent_request)["Lender"]
-    amount = get_slots(intent_request)["Amount"]
+    debtor = intent_request['userId'].split(":")[2]
+    lender = intent_request['currentIntent']['slots']["Lender"]
+    amount = intent_request['currentIntent']['slots']["Amount"]
     source = intent_request['invocationSource']
 
     if source == 'DialogCodeHook':
         # Perform basic validation on the supplied input slots.
         # Use the elicitSlot dialog action to re-prompt for the first violation detected.
-        slots = get_slots(intent_request)
+        slots = intent_request['currentIntent']['slots']
 
         validation_result = validate_request_debt(lender, amount)
         if not validation_result['isValid']:
@@ -202,19 +184,20 @@ def record_debt(intent_request):
                                validation_result['violatedSlot'],
                                validation_result['message'])
 
-        # TODO: Utilize output_session_attributes
+        # You can utilize output_session_attributes to add functionality to the bot
         output_session_attributes = intent_request['sessionAttributes'] if intent_request['sessionAttributes'] is not None else {}
 
-        return delegate(output_session_attributes, get_slots(intent_request))
+        return delegate(output_session_attributes, intent_request['currentIntent']['slots'])
 
-    # Store changes, and rely on the goodbye message of the bot to define the message to the end user. (Lex goodbye message is not displayed)
+    # Store changes
     user, owed_user, owed_amount = parse_user_and_amount(debtor, lender, amount)
     save_to_db(user, owed_user, owed_amount)
 
+    # Rely on the goodbye message of the bot to define the message to the end user
     return close(intent_request['sessionAttributes'],
                  'Fulfilled',
                  {'contentType': 'PlainText',
-                  'content': 'Okay, I have successfully recorded {} chips owed to {} in my books'.format(amount, lender)})
+                  'content': '{} chips owed to {} has been recorded in my books!'.format(amount, lender)})
 
 
 """ --- Intents --- """
@@ -225,11 +208,11 @@ def dispatch(intent_request):
     Called when the user specifies an intent for this bot.
     """
 
-    logger.debug('dispatch userId={}, intentName={}'.format(intent_request['userId'], intent_request['currentIntent']['name']))
+    logger.debug('INTENT_REQUEST={}'.format(intent_request))
 
     intent_name = intent_request['currentIntent']['name']
 
-    # Dispatch to your bot's intent handlers
+    # Dispatch to bot's intent handlers
     if intent_name == 'record_debt':
         return record_debt(intent_request)
 
