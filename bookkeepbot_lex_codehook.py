@@ -1,6 +1,7 @@
 import boto3
 import time
 import os
+import re
 import logging
 from urllib import urlopen, urlencode
 import json
@@ -56,20 +57,6 @@ def close(session_attributes, fulfillment_state, message):
 """ --- Helper Functions --- """
 
 
-def isvalid_user(user):
-    try:
-        get_slack_username(user)
-        return True
-    except IOError:
-        return False
-    except KeyError:
-        return False
-
-
-def isvalid_float(s):
-    return s.replace('.', '', 1).isdigit()
-
-
 def get_slack_username(user):
     url = "https://slack.com/api/users.info"
     params = {
@@ -80,6 +67,30 @@ def get_slack_username(user):
 
     resp = urlopen(url, params_encoded)
     return json.load(resp)["user"]["name"]
+
+
+def isvalid_user(user):
+    try:
+        get_slack_username(user)
+        return True
+    except IOError:
+        return False
+    except KeyError:
+        return False
+
+
+def isvalid_amount(s):
+    return re.match(r"(-?)(\$?)(\d\d?(\d+|(,\d\d\d)*)(\.\d+)?|(\.\d+))", s)
+
+
+def get_amount_in_float(s):
+    p_amount = isvalid_amount(s)
+    if p_amount:
+        logger.debug('FOUNT P_AMOUNT IN GET_AMOUNT_IN_FLOAT')
+        return float(p_amount.group(3).replace(',', '').replace('$', ''))
+    else:
+        logger.debug('ERROR IN GET_AMOUNT_IN_FLOAT')
+        return 99.0
 
 
 def build_validation_result(is_valid, violated_slot, message_content):
@@ -105,7 +116,7 @@ def validate_request_debt(lender, amount):
                                            'Please enter a user in the Slack team.'.format(lender))
 
     if amount is not None:
-        if not isvalid_float(amount):
+        if not isvalid_amount(amount):
             return build_validation_result(False,
                                            'Amount',
                                            '{} is an invalid amount. '
@@ -125,8 +136,8 @@ def parse_user_and_amount(debtor, lender, amount):
     user_name = get_slack_username(debtor)
     debtor_escaped = "<@" + debtor + "|" + user_name + ">"
 
-    logger.debug('AMOUNT={}'.format(amount))
-    owed_amount = float(amount)
+    # logger.debug('AMOUNT={}'.format(amount))
+    owed_amount = get_amount_in_float(amount)
 
     return debtor_escaped, lender_escaped, owed_amount
 
