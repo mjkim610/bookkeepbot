@@ -130,11 +130,11 @@ def validate_request_debt(lender, amount):
 
 def parse_user_and_amount(debtor, lender, amount):
 
-    user_name = get_slack_username(lender)
-    lender_escaped = "<@" + lender + "|" + user_name + ">"
-
     user_name = get_slack_username(debtor)
     debtor_escaped = "<@" + debtor + "|" + user_name + ">"
+
+    user_name = get_slack_username(lender)
+    lender_escaped = "<@" + lender + "|" + user_name + ">"
 
     # logger.debug('AMOUNT={}'.format(amount))
     owed_amount = get_amount_in_float(amount)
@@ -164,6 +164,21 @@ def save_to_db(debtor, lender, amount):  # make sure to use the same keys in Dyn
                            }
                        }
     )
+
+
+""" --- Helpler functions for get_list --- """
+
+
+def get_entries():
+    res = dynamo.scan(TableName=table_name)
+
+    logger.info(res)
+
+    entry_list = {}
+    for item in res['Items']:
+        entry_list[item['user']['S']] = item['chips']['N']
+
+    return entry_list
 
 
 """ --- Functions that control the bot's behavior --- """
@@ -201,14 +216,39 @@ def record_debt(intent_request):
         return delegate(output_session_attributes, intent_request['currentIntent']['slots'])
 
     # Store changes
-    user, owed_user, owed_amount = parse_user_and_amount(debtor, lender, amount)
-    save_to_db(user, owed_user, owed_amount)
+    debtor_parsed, lender_parsed, amount_parsed = parse_user_and_amount(debtor, lender, amount)
+    save_to_db(debtor_parsed, lender_parsed, amount_parsed)
 
     # Rely on the goodbye message of the bot to define the message to the end user
     return close(intent_request['sessionAttributes'],
                  'Fulfilled',
                  {'contentType': 'PlainText',
-                  'content': '{} chips owed to {} has been recorded in my books!'.format(amount, lender)})
+                  'content': '{} chips owed to {} has been recorded in my books!'.format(amount, lender_parsed)})
+
+
+def get_list(intent_request):
+    """
+    Performs dialog management and fulfillment for recording debt.
+    Beyond fulfillment, the implementation of this intent demonstrates the use of the elicitSlot dialog action
+    in slot validation and re-prompting.
+    """
+
+    list = get_entries()
+
+    if list:
+        response = "This is the current standing:\n"
+        response += "```"
+        for user, chips in sorted(list.items()):
+            response += "{:<10}:{:>5}\n".format(user, chips)
+        response += "```"
+    else:
+        response = "There are no unpaid debts in this group! :smile:"
+
+    # Rely on the goodbye message of the bot to define the message to the end user
+    return close(intent_request['sessionAttributes'],
+                 'Fulfilled',
+                 {'contentType': 'PlainText',
+                  'content': '{}'.format(response)})
 
 
 """ --- Intents --- """
@@ -226,6 +266,8 @@ def dispatch(intent_request):
     # Dispatch to bot's intent handlers
     if intent_name == 'record_debt':
         return record_debt(intent_request)
+    if intent_name == 'get_list':
+        return get_list(intent_request)
 
     raise Exception('Intent with name ' + intent_name + ' not supported')
 
