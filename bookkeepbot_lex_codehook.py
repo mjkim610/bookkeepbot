@@ -145,7 +145,7 @@ def parse_user_and_amount(debtor, lender, amount):
 def save_to_db(debtor, lender, amount):  # make sure to use the same keys in DynamoDB
     # subtract amount from debtor
     dynamo.update_item(TableName=table_name,
-                       Key={'user':{'S': debtor}},
+                       Key={'user': {'S': debtor}},
                        AttributeUpdates={
                            'chips': {
                                'Action': 'ADD',
@@ -193,6 +193,8 @@ def record_debt(intent_request):
 
     debtor = intent_request['userId'].split(":")[2]
     lender = intent_request['currentIntent']['slots']["Lender"]
+    if lender and lender[:1] == "@":
+        lender = lender[1:]
     amount = intent_request['currentIntent']['slots']["Amount"]
     source = intent_request['invocationSource']
 
@@ -211,7 +213,8 @@ def record_debt(intent_request):
                                validation_result['message'])
 
         # You can utilize output_session_attributes to add functionality to the bot
-        output_session_attributes = intent_request['sessionAttributes'] if intent_request['sessionAttributes'] is not None else {}
+        output_session_attributes = intent_request['sessionAttributes'] \
+            if intent_request['sessionAttributes'] is not None else {}
 
         return delegate(output_session_attributes, intent_request['currentIntent']['slots'])
 
@@ -233,12 +236,12 @@ def get_list(intent_request):
     in slot validation and re-prompting.
     """
 
-    list = get_entries()
+    ledger = get_entries()
 
-    if list:
+    if ledger:
         response = "This is the current standing:\n"
         response += "```"
-        for user, chips in sorted(list.items()):
+        for user, chips in sorted(ledger.items()):
             response += "{:<10}:{:>5}\n".format(user, chips)
         response += "```"
     else:
